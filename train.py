@@ -57,18 +57,20 @@ def train():
                 ####### discriminator            
                 ### individual frame discriminator          
                 real_B_prev, real_B = real_Bp[:, :-1], real_Bp[:, 1:]   # the collection of previous and current real frames
-                flow_ref, conf_ref = flowNet(real_B, real_B_prev)       # reference flows and confidences                
+                #flow_ref, conf_ref = flowNet(real_B, real_B_prev)       # reference flows and confidences
+                flow_ref = fake_B
+                conf_ref = fake_B
                 fake_B_prev = modelG.module.compute_fake_B_prev(real_B_prev, fake_B_prev_last, fake_B)
                 fake_B_prev_last = fake_B_last
                
-                losses = modelD(0, reshape([real_B, fake_B, fake_B_raw, real_A, real_B_prev, fake_B_prev, flow, weight, flow_ref, conf_ref]))
+                losses = modelD(0, reshape([real_B, fake_B, fake_B_raw, real_A, real_B_prev, fake_B_prev, flow, weight]))
                 losses = [ torch.mean(x) if x is not None else 0 for x in losses ]
                 loss_dict = dict(zip(modelD.module.loss_names, losses))
 
                 ### temporal discriminator                
                 # get skipped frames for each temporal scale
                 frames_all, frames_skipped = modelD.module.get_all_skipped_frames(frames_all, \
-                        real_B, fake_B, flow_ref, conf_ref, t_scales, tD, n_frames_load, i, flowNet)                                
+                        real_B, fake_B, t_scales, tD, n_frames_load, i, flowNet)                                
 
                 # run discriminator for each temporal scale
                 loss_dict_T = []

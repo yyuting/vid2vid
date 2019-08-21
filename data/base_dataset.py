@@ -64,11 +64,11 @@ class BaseDataset(data.Dataset):
 
     def init_data(self, t_scales):
         fake_B_last = None  # the last generated frame from previous training batch (which becomes input to the next batch)
-        real_B_all, fake_B_all, flow_ref_all, conf_ref_all = None, None, None, None # all real/generated frames so far
+        real_B_all, fake_B_all = None, None # all real/generated frames so far
         if self.opt.sparse_D:
-            real_B_all, fake_B_all, flow_ref_all, conf_ref_all = [None]*t_scales, [None]*t_scales, [None]*t_scales, [None]*t_scales
+            real_B_all, fake_B_all = [None]*t_scales, [None]*t_scales
         
-        frames_all = real_B_all, fake_B_all, flow_ref_all, conf_ref_all        
+        frames_all = real_B_all, fake_B_all        
         return fake_B_last, frames_all
 
     def prepare_data(self, data, i, input_nc, output_nc):

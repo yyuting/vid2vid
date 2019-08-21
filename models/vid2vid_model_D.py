@@ -40,7 +40,7 @@ class Vid2VidModelD(BaseModel):
                                             max(1, opt.num_D - 2), not opt.no_ganFeat, gpu_ids=self.gpu_ids)
                     
         # temporal discriminator
-        netD_input_nc = opt.output_nc * opt.n_frames_D + 2 * (opt.n_frames_D-1)        
+        netD_input_nc = opt.output_nc * opt.n_frames_D       
         for s in range(opt.n_scales_temporal):
             setattr(self, 'netD_T'+str(s), networks.define_D(netD_input_nc, opt.ndf, opt.n_layers_D, opt.norm,
                     opt.num_D, not opt.no_ganFeat, gpu_ids=self.gpu_ids))        
@@ -102,42 +102,55 @@ class Vid2VidModelD(BaseModel):
                 return [self.Tensor(1, 1).fill_(0)] * (len(self.loss_names_T) if scale_T > 0 else len(self.loss_names))
         
         if scale_T > 0:
-            real_B, fake_B, flow_ref, conf_ref = tensors_list
+            real_B, fake_B = tensors_list
             _, _, _, self.height, self.width = real_B.size()
             loss_D_T_real, loss_D_T_fake, loss_G_T_GAN, loss_G_T_GAN_Feat = self.compute_loss_D_T(real_B, fake_B, 
-                flow_ref/20, conf_ref, scale_T-1)            
+                scale_T-1)            
             loss_G_T_Warp = torch.zeros_like(loss_G_T_GAN)
 
             loss_list = [loss_G_T_GAN, loss_G_T_GAN_Feat, loss_D_T_real, loss_D_T_fake, loss_G_T_Warp]
             loss_list = [loss.view(-1, 1) for loss in loss_list]
             return loss_list            
 
-        real_B, fake_B, fake_B_raw, real_A, real_B_prev, fake_B_prev, flow, weight, flow_ref, conf_ref = tensors_list
+        real_B, fake_B, fake_B_raw, real_A, real_B_prev, fake_B_prev, flow, weight = tensors_list
         _, _, self.height, self.width = real_B.size()
 
         ################### Flow loss #################
         if flow is not None:
-            # similar to flownet flow        
-            loss_F_Flow = self.criterionFlow(flow, flow_ref, conf_ref) * lambda_F / (2 ** (scale_S-1))        
-            # warped prev image should be close to current image            
-            real_B_warp = self.resample(real_B_prev, flow)                
-            loss_F_Warp = self.criterionFlow(real_B_warp, real_B, conf_ref) * lambda_T
-            
-            ################## weight loss ##################
+            if False:
+                # TODO: has to set false because flownet is not working
+                # similar to flownet flow        
+                loss_F_Flow = self.criterionFlow(flow, flow_ref, conf_ref) * lambda_F / (2 ** (scale_S-1))        
+                # warped prev image should be close to current image            
+                real_B_warp = self.resample(real_B_prev, flow)                
+                loss_F_Warp = self.criterionFlow(real_B_warp, real_B, conf_ref) * lambda_T
+
+                ################## weight loss ##################
+                loss_W = torch.zeros_like(weight)
+                if self.opt.no_first_img:
+                    dummy0 = torch.zeros_like(weight)
+                    loss_W = self.criterionFlow(weight, dummy0, conf_ref)
+                    
+            loss_F_Flow = 0.0
+            real_B_warp = self.resample(real_B_prev, flow)  
+            loss_F_Warp = self.criterionFeat(real_B_warp, real_B) * lambda_T
             loss_W = torch.zeros_like(weight)
             if self.opt.no_first_img:
                 dummy0 = torch.zeros_like(weight)
-                loss_W = self.criterionFlow(weight, dummy0, conf_ref)
+                loss_W = self.criterionFeat(weight, dummy0)
         else:
-            loss_F_Flow = loss_F_Warp = loss_W = torch.zeros_like(conf_ref)
+            loss_F_Flow = loss_F_Warp = loss_W = 0.0 #torch.zeros_like(conf_ref)
 
         #################### fake_B loss ####################        
         ### VGG + GAN loss 
         loss_G_VGG = (self.criterionVGG(fake_B, real_B) * lambda_feat) if not self.opt.no_vgg else torch.zeros_like(loss_W)
         loss_D_real, loss_D_fake, loss_G_GAN, loss_G_GAN_Feat = self.compute_loss_D(self.netD, real_A, real_B, fake_B)
         ### Warp loss
-        fake_B_warp_ref = self.resample(fake_B_prev, flow_ref)
-        loss_G_Warp = self.criterionWarp(fake_B, fake_B_warp_ref.detach(), conf_ref) * lambda_T
+        if False:
+            # TODO: can put this term back once using our computed flow from shader
+            fake_B_warp_ref = self.resample(fake_B_prev, flow_ref)
+            loss_G_Warp = self.criterionWarp(fake_B, fake_B_warp_ref.detach(), conf_ref) * lambda_T
+        loss_G_Warp = 0.0
         
         if fake_B_raw is not None:
             if not self.opt.no_vgg:
@@ -160,6 +173,18 @@ class Vid2VidModelD(BaseModel):
         loss_list = [loss_G_VGG, loss_G_GAN, loss_G_GAN_Feat,
                      loss_D_real, loss_D_fake, 
                      loss_G_Warp, loss_F_Flow, loss_F_Warp, loss_W]
+        
+        first_tensor = None
+        for loss in loss_list:
+            if isinstance(loss, torch.Tensor):
+                first_tensor = loss
+                break
+                
+        for i in range(len(loss_list)):
+            loss = loss_list[i]
+            if isinstance(loss, (float, int)):
+                loss_list[i] = torch.zeros_like(first_tensor)
+        
         if self.opt.add_face_disc:
             loss_list += [loss_G_f_GAN, loss_G_f_GAN_Feat, loss_D_f_real, loss_D_f_fake]   
         loss_list = [loss.view(-1, 1) for loss in loss_list]           
@@ -178,11 +203,11 @@ class Vid2VidModelD(BaseModel):
 
         return loss_D_real, loss_D_fake, loss_G_GAN, loss_G_GAN_Feat      
 
-    def compute_loss_D_T(self, real_B, fake_B, flow_ref, conf_ref, scale_T):         
+    def compute_loss_D_T(self, real_B, fake_B, scale_T):         
         netD_T = getattr(self, 'netD_T'+str(scale_T))
         real_B = real_B.view(-1, self.output_nc * self.tD, self.height, self.width)
         fake_B = fake_B.view(-1, self.output_nc * self.tD, self.height, self.width)        
-        if flow_ref is not None:
+        if False:
             flow_ref = flow_ref.view(-1, 2 * (self.tD-1), self.height, self.width)                        
             real_B = torch.cat([real_B, flow_ref], dim=1)
             fake_B = torch.cat([fake_B, flow_ref], dim=1)
@@ -229,8 +254,8 @@ class Vid2VidModelD(BaseModel):
             return ys, ye, xs, xe
         return None, None, None, None
 
-    def get_all_skipped_frames(self, frames_all, real_B, fake_B, flow_ref, conf_ref, t_scales, tD, n_frames_load, i, flowNet):
-        real_B_all, fake_B_all, flow_ref_all, conf_ref_all = frames_all
+    def get_all_skipped_frames(self, frames_all, real_B, fake_B, t_scales, tD, n_frames_load, i, flowNet):
+        real_B_all, fake_B_all = frames_all
         if t_scales > 0:
             if self.opt.sparse_D:          
                 real_B_all, real_B_skipped = get_skipped_frames_sparse(real_B_all, real_B, t_scales, tD, n_frames_load, i)
@@ -240,10 +265,10 @@ class Vid2VidModelD(BaseModel):
             else:
                 real_B_all, real_B_skipped = get_skipped_frames(real_B_all, real_B, t_scales, tD)
                 fake_B_all, fake_B_skipped = get_skipped_frames(fake_B_all, fake_B, t_scales, tD)                
-                flow_ref_all, conf_ref_all, flow_ref_skipped, conf_ref_skipped = get_skipped_flows(flowNet, 
-                    flow_ref_all, conf_ref_all, real_B_skipped, flow_ref, conf_ref, t_scales, tD)    
-        frames_all = real_B_all, fake_B_all, flow_ref_all, conf_ref_all
-        frames_skipped = real_B_skipped, fake_B_skipped, flow_ref_skipped, conf_ref_skipped
+                #flow_ref_all, conf_ref_all, flow_ref_skipped, conf_ref_skipped = get_skipped_flows(flowNet, 
+                #    flow_ref_all, conf_ref_all, real_B_skipped, flow_ref, conf_ref, t_scales, tD)    
+        frames_all = real_B_all, fake_B_all
+        frames_skipped = real_B_skipped, fake_B_skipped
         return frames_all, frames_skipped
 
     def get_losses(self, loss_dict, loss_dict_T, t_scales):

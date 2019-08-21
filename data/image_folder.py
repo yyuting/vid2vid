@@ -36,7 +36,7 @@ def make_dataset(dir):
 def make_grouped_dataset(dir):
     images = []
     assert os.path.isdir(dir), '%s is not a valid directory' % dir
-    fnames = sorted(os.walk(dir))
+    fnames = sorted(os.walk(dir, followlinks=True))
     for fname in sorted(fnames):
         paths = []
         root = fname[0]
